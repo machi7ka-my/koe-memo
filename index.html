@@ -350,9 +350,39 @@ label.field { display: block; font-size: 14px; font-weight: 600; margin: 14px 0 
     return s;
   }
 
-  async function callGemini(wavBlob) {
-    const data = await blobToBase64(wavBlob);
-    const res = await fetch(`${API}/models/${encodeURIComponent(settings.model)}:generateContent`, {
+  // 混雑（503）や一時的な不具合のときに順に試す控えのモデル
+  const FALLBACK_ORDER = ['gemini-3.8-flash', 'gemini-3.7-flash', 'gemini-3.6-flash', 'gemini-3.5-flash', 'gemini-3.1-flash-lite', 'gemini-3.5-flash-lite'];
+  const sleep = ms => new Promise(r => setTimeout(r, ms));
+
+  function modelChain() {
+    const known = ls.get('models', null);
+    const rest = FALLBACK_ORDER.filter(m => m !== settings.model && (!known || known.includes(m)));
+    return [settings.model, ...rest.slice(0, 2)];
+  }
+
+  // 同じモデルで2回まで待って再送 → だめなら次のモデルへ
+  async function callWithRetry(data) {
+    let lastErr;
+    for (const model of modelChain()) {
+      for (let attempt = 0; attempt < 3; attempt++) {
+        try { return Object.assign(await callGemini(data, model), { model }); }
+        catch (e) {
+          lastErr = e;
+          if (!e.transient) throw e;
+          if (attempt < 2) {
+            const wait = attempt === 0 ? 3 : 8;
+            setStatus(`${model} が混み合っています。${wait}秒後に再送信します…`);
+            await sleep(wait * 1000);
+          }
+        }
+      }
+      setStatus(`${model} が混み合っているため、別のモデルに切り替えます…`);
+    }
+    throw lastErr;
+  }
+
+  async function callGemini(data, model) {
+    const res = await fetch(`${API}/models/${encodeURIComponent(model)}:generateContent`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json', 'x-goog-api-key': settings.apiKey },
       body: JSON.stringify({
@@ -364,9 +394,13 @@ label.field { display: block; font-size: 14px; font-weight: 600; margin: 14px 0 
     if (!res.ok) {
       const m = json.error && json.error.message || res.statusText;
       if (res.status === 400 && /API key/i.test(m)) throw new Error('API キーが正しくないようです。設定を確認してください。');
-      if (res.status === 404) throw new Error(`モデル「${settings.model}」が使えません。設定で「使えるモデルを読み込む」を押して選び直してください。`);
+      if (res.status === 404) throw Object.assign(new Error(`モデル「${model}」が使えません。設定で「使えるモデルを読み込む」を押して選び直してください。`), { transient: model !== settings.model });
       if (res.status === 429) throw new Error('利用上限に達しました（無料枠の制限の可能性）。少し待つか、有料枠のキーを使ってください。\n' + m);
-      throw new Error(`Gemini エラー (${res.status})：${m}`);
+      const err = new Error(res.status === 503
+        ? 'Gemini が混み合っていて、控えのモデルでも処理できませんでした。録音は保存してあるので、少し時間をおいて「前回の録音を再送信」を押してください。'
+        : `Gemini エラー (${res.status})：${m}`);
+      err.transient = res.status >= 500;
+      throw err;
     }
     const cand = json.candidates && json.candidates[0];
     const text = cand && cand.content && (cand.content.parts || []).filter(p => p.text && !p.thought).map(p => p.text).join('').trim();
@@ -381,12 +415,12 @@ label.field { display: block; font-size: 14px; font-weight: 600; margin: 14px 0 
       setStatus('音声を変換中…');
       const { blob: wav, duration } = await toWav(blob);
       sec = sec || duration;
-      setStatus(`Gemini で文字にしています…（${fmt(sec)} 分の音声）`);
+      setStatus(`Gemini で文字にしています…（${fmt(sec)} の音声）`);
       const t0 = Date.now();
-      const { text, usage } = await callGemini(wav);
+      const { text, usage, model } = await callWithRetry(await blobToBase64(wav));
       $('resultCard').classList.remove('hidden');
       $('output').value = text;
-      $('outputMeta').textContent = `${MODE_LABEL[settings.mode]}・${settings.model}・${((Date.now() - t0) / 1000).toFixed(1)}秒` +
+      $('outputMeta').textContent = `${MODE_LABEL[settings.mode]}・${model}・${((Date.now() - t0) / 1000).toFixed(1)}秒` +
         (usage.totalTokenCount ? `・${usage.promptTokenCount || 0} → ${usage.candidatesTokenCount || 0} tokens` : '');
       history.unshift({ at: Date.now(), mode: settings.mode, sec, text });
       history = history.slice(0, 50);
