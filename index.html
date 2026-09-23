@@ -1,0 +1,469 @@
+<!doctype html>
+<html lang="ja">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>こえメモ</title>
+<meta name="description" content="話した内容を Gemini で文字起こし・要約する自分専用アプリ">
+<meta name="theme-color" content="#2563eb">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-title" content="こえメモ">
+<meta name="apple-mobile-web-app-status-bar-style" content="default">
+<link rel="manifest" href="manifest.webmanifest">
+<link rel="apple-touch-icon" href="icon-180.png">
+<style>
+:root {
+  --bg: #f6f7f9; --surface: #ffffff; --text: #1a1d23; --muted: #6b7280;
+  --border: #e3e6eb; --accent: #2563eb; --accent-text: #ffffff;
+  --rec: #dc2626; --ok: #15803d; --err-bg: #fef2f2; --err: #b91c1c;
+}
+@media (prefers-color-scheme: dark) {
+  :root {
+    --bg: #111317; --surface: #1b1e24; --text: #e8eaee; --muted: #9aa1ad;
+    --border: #2c3038; --accent: #4f83f1; --accent-text: #ffffff;
+    --rec: #ef4444; --ok: #4ade80; --err-bg: #2a1616; --err: #fca5a5;
+  }
+}
+* { box-sizing: border-box; }
+html { -webkit-text-size-adjust: 100%; }
+body {
+  margin: 0; background: var(--bg); color: var(--text);
+  font: 16px/1.6 -apple-system, BlinkMacSystemFont, "Hiragino Sans", "Noto Sans JP", sans-serif;
+  padding: env(safe-area-inset-top) 0 env(safe-area-inset-bottom);
+}
+main { max-width: 640px; margin: 0 auto; padding: 12px 16px 48px; }
+header { display: flex; align-items: center; justify-content: space-between; padding: 4px 0 12px; }
+h1 { font-size: 20px; margin: 0; }
+button { font: inherit; color: inherit; cursor: pointer; }
+.icon-btn { background: none; border: 1px solid var(--border); border-radius: 10px; padding: 6px 12px; }
+.card { background: var(--surface); border: 1px solid var(--border); border-radius: 14px; padding: 16px; margin-bottom: 14px; }
+.modes { display: grid; grid-template-columns: repeat(3, 1fr); gap: 6px; margin-bottom: 16px; }
+.modes button { border: 1px solid var(--border); background: var(--bg); border-radius: 10px; padding: 8px 4px; font-size: 14px; }
+.modes button[aria-pressed="true"] { background: var(--accent); color: var(--accent-text); border-color: var(--accent); }
+.rec-wrap { display: flex; flex-direction: column; align-items: center; gap: 10px; }
+#recBtn {
+  width: 132px; height: 132px; border-radius: 50%; border: none;
+  background: var(--accent); color: var(--accent-text); font-size: 17px; font-weight: 600;
+  box-shadow: 0 6px 18px rgba(37,99,235,.3); touch-action: manipulation;
+}
+#recBtn.recording { background: var(--rec); box-shadow: 0 0 0 0 rgba(220,38,38,.5); animation: pulse 1.6s infinite; }
+#recBtn:disabled { opacity: .5; }
+@keyframes pulse { 0% { box-shadow: 0 0 0 0 rgba(220,38,38,.45); } 70% { box-shadow: 0 0 0 22px rgba(220,38,38,0); } 100% { box-shadow: 0 0 0 0 rgba(220,38,38,0); } }
+#timer { font-variant-numeric: tabular-nums; font-size: 22px; font-weight: 600; }
+#status { color: var(--muted); font-size: 14px; text-align: center; min-height: 1.6em; }
+.sub-actions { display: flex; gap: 8px; justify-content: center; flex-wrap: wrap; }
+.sub-actions button, .sub-actions label { font-size: 14px; border: 1px solid var(--border); background: var(--bg); border-radius: 10px; padding: 6px 12px; }
+.error { background: var(--err-bg); color: var(--err); border-radius: 10px; padding: 10px 12px; font-size: 14px; white-space: pre-wrap; }
+textarea, input, select {
+  width: 100%; font: inherit; font-size: 16px; color: var(--text); background: var(--bg);
+  border: 1px solid var(--border); border-radius: 10px; padding: 10px;
+}
+#output { min-height: 260px; resize: vertical; line-height: 1.7; }
+.row { display: flex; gap: 8px; margin-top: 10px; }
+.row button { flex: 1; border: none; border-radius: 10px; padding: 11px; font-weight: 600; background: var(--accent); color: var(--accent-text); }
+.row button.secondary { background: var(--bg); color: var(--text); border: 1px solid var(--border); }
+.meta { color: var(--muted); font-size: 12px; margin-top: 6px; }
+h2 { font-size: 16px; margin: 0 0 10px; }
+label.field { display: block; font-size: 14px; font-weight: 600; margin: 14px 0 6px; }
+.hint { color: var(--muted); font-size: 12px; margin-top: 4px; }
+.hist-item { border-top: 1px solid var(--border); padding: 10px 0; }
+.hist-item:first-child { border-top: none; }
+.hist-head { display: flex; justify-content: space-between; align-items: center; font-size: 12px; color: var(--muted); }
+.hist-text { font-size: 14px; white-space: pre-wrap; max-height: 4.8em; overflow: hidden; margin-top: 4px; }
+.hist-item.open .hist-text { max-height: none; }
+.hist-btns button { font-size: 12px; background: none; border: 1px solid var(--border); border-radius: 8px; padding: 2px 8px; margin-left: 4px; }
+.hidden { display: none !important; }
+.toast { position: fixed; left: 50%; bottom: calc(24px + env(safe-area-inset-bottom)); transform: translateX(-50%); background: var(--text); color: var(--bg); padding: 8px 16px; border-radius: 20px; font-size: 14px; opacity: 0; transition: opacity .2s; pointer-events: none; }
+.toast.show { opacity: .92; }
+</style>
+</head>
+<body>
+<main>
+  <header>
+    <h1>こえメモ</h1>
+    <button class="icon-btn" id="settingsBtn">設定</button>
+  </header>
+
+  <section class="card" id="setupCard">
+    <h2>はじめに</h2>
+    <p style="margin:0;font-size:14px">「設定」から Gemini の API キーを入力してください。キーはこの端末の中にだけ保存されます。</p>
+  </section>
+
+  <section class="card">
+    <div class="modes" role="group" aria-label="仕上げ方">
+      <button data-mode="clean">整文</button>
+      <button data-mode="summary">要約＋本文</button>
+      <button data-mode="memo">箇条書き</button>
+    </div>
+    <div class="rec-wrap">
+      <button id="recBtn">録音開始</button>
+      <div id="timer">0:00</div>
+      <div id="status">ボタンを押して話してください</div>
+      <div class="sub-actions">
+        <button id="retryBtn" class="hidden">前回の録音を再送信</button>
+        <label>音声ファイルから<input type="file" id="fileInput" accept="audio/*,video/mp4,.m4a" class="hidden"></label>
+      </div>
+      <div id="errorBox" class="error hidden"></div>
+    </div>
+  </section>
+
+  <section class="card hidden" id="resultCard">
+    <h2>結果</h2>
+    <textarea id="output" aria-label="結果"></textarea>
+    <div class="meta" id="outputMeta"></div>
+    <div class="row">
+      <button id="copyBtn">コピー</button>
+      <button id="shareBtn" class="secondary">共有</button>
+    </div>
+  </section>
+
+  <section class="card">
+    <h2>履歴</h2>
+    <div id="history"><p class="hint" style="margin:0">まだありません</p></div>
+  </section>
+
+  <section class="card hidden" id="settingsCard">
+    <h2>設定</h2>
+    <label class="field" for="apiKey">Gemini API キー</label>
+    <input id="apiKey" type="password" autocomplete="off" placeholder="AIza...">
+    <div class="hint">Google AI Studio で発行。仕事の話を吹き込むなら、請求先を設定した有料枠のキーを使ってください（無料枠は送信内容が Google の改善に使われる場合があります）。</div>
+
+    <label class="field" for="model">モデル</label>
+    <select id="model"><option value="gemini-3.8-flash">gemini-3.8-flash</option></select>
+    <div class="hint"><button class="icon-btn" id="loadModelsBtn" style="font-size:12px;padding:2px 8px;margin-top:4px">使えるモデルを読み込む</button></div>
+
+    <label class="field" for="dict">固有名詞辞書</label>
+    <textarea id="dict" rows="4" placeholder="1行に1語。例：&#10;町中&#10;イシマル&#10;NIコラボ"></textarea>
+    <div class="hint">人名・社名・商品名など、正しく表記してほしい言葉。</div>
+
+    <label class="field" for="custom">追加の指示（任意）</label>
+    <textarea id="custom" rows="3" placeholder="例：です・ます調で。数字は半角で。"></textarea>
+
+    <div class="row">
+      <button id="saveSettingsBtn">保存して閉じる</button>
+    </div>
+  </section>
+</main>
+<div class="toast" id="toast"></div>
+
+<script>
+(() => {
+  'use strict';
+
+  const API = 'https://generativelanguage.googleapis.com/v1beta';
+  const MAX_SECONDS = 15 * 60;          // 自動停止
+  const INLINE_LIMIT = 19 * 1024 * 1024; // Gemini のインライン送信上限 20MB に余裕を持たせる
+
+  const MODE_PROMPTS = {
+    clean: `音声の内容を、意味を一切変えずに読みやすい日本語の文章に整えてください。
+- 「えー」「あのー」などのフィラー、言い直し、同じことの繰り返しは除く
+- 話し言葉を自然な書き言葉に直す（ただし要約・省略はしない）
+- 話題が変わるところで段落を分ける
+- 聞き取れない箇所は推測で埋めず［聞き取れず］と書く`,
+    summary: `音声の内容を、次の形式で出力してください。
+## 要点
+- 最も大事なことを3〜5個の箇条書きで（決まったこと・やること・期限があれば必ず含める）
+
+## 本文
+- 話した内容を意味を変えずに読みやすい文章に整える
+- フィラー・言い直し・繰り返しは除く。要約・省略はしない
+- 話題が変わるところで段落を分ける
+- 聞き取れない箇所は推測で埋めず［聞き取れず］と書く`,
+    memo: `音声の内容を、話題ごとの見出しと箇条書きで構造化したメモにしてください。
+- 見出しは「## 」で始める
+- 1項目は短く、主語と結論がわかるように
+- やること（ToDo）があれば最後に「## やること」として「- [ ] 」形式でまとめる
+- 話していないことは付け足さない`
+  };
+  const MODE_LABEL = { clean: '整文', summary: '要約＋本文', memo: '箇条書き' };
+
+  // ---------- storage helpers (すべて try/catch) ----------
+  const ls = {
+    get(k, d) { try { const v = localStorage.getItem(k); return v === null ? d : JSON.parse(v); } catch { return d; } },
+    set(k, v) { try { localStorage.setItem(k, JSON.stringify(v)); } catch {} }
+  };
+  const idb = {
+    open() {
+      return new Promise((res, rej) => {
+        const r = indexedDB.open('koe-memo', 1);
+        r.onupgradeneeded = () => r.result.createObjectStore('audio');
+        r.onsuccess = () => res(r.result); r.onerror = () => rej(r.error);
+      });
+    },
+    async put(key, val) {
+      try { const db = await this.open(); await new Promise((res, rej) => { const t = db.transaction('audio', 'readwrite'); t.objectStore('audio').put(val, key); t.oncomplete = res; t.onerror = () => rej(t.error); }); } catch {}
+    },
+    async get(key) {
+      try { const db = await this.open(); return await new Promise((res, rej) => { const q = db.transaction('audio').objectStore('audio').get(key); q.onsuccess = () => res(q.result); q.onerror = () => rej(q.error); }); } catch { return undefined; }
+    }
+  };
+
+  // ---------- state ----------
+  const settings = Object.assign({ apiKey: '', model: 'gemini-3.8-flash', dict: '', custom: '', mode: 'summary' }, ls.get('settings', {}));
+  let history = ls.get('history', []);
+  let recorder = null, chunks = [], stream = null, startAt = 0, tick = null, wakeLock = null, busy = false;
+
+  const $ = id => document.getElementById(id);
+  const recBtn = $('recBtn'), statusEl = $('status'), timerEl = $('timer'), errorBox = $('errorBox');
+
+  // ---------- UI ----------
+  function toast(msg) { const t = $('toast'); t.textContent = msg; t.classList.add('show'); setTimeout(() => t.classList.remove('show'), 1600); }
+  function setStatus(s) { statusEl.textContent = s; }
+  function showError(msg) { errorBox.textContent = msg; errorBox.classList.toggle('hidden', !msg); }
+  function fmt(sec) { sec = Math.floor(sec); return `${Math.floor(sec / 60)}:${String(sec % 60).padStart(2, '0')}`; }
+
+  function renderModes() {
+    document.querySelectorAll('.modes button').forEach(b => b.setAttribute('aria-pressed', String(b.dataset.mode === settings.mode)));
+  }
+  function renderSetup() { $('setupCard').classList.toggle('hidden', !!settings.apiKey); }
+  function renderModelSelect(list) {
+    const sel = $('model');
+    const names = list && list.length ? list : [settings.model];
+    if (!names.includes(settings.model)) names.unshift(settings.model);
+    sel.innerHTML = '';
+    names.forEach(n => { const o = document.createElement('option'); o.value = o.textContent = n; sel.appendChild(o); });
+    sel.value = settings.model;
+  }
+  function renderHistory() {
+    const box = $('history');
+    if (!history.length) { box.innerHTML = '<p class="hint" style="margin:0">まだありません</p>'; return; }
+    box.innerHTML = '';
+    history.forEach((h, i) => {
+      const d = document.createElement('div'); d.className = 'hist-item';
+      const head = document.createElement('div'); head.className = 'hist-head';
+      const when = document.createElement('span');
+      when.textContent = `${new Date(h.at).toLocaleString('ja-JP', { month: 'numeric', day: 'numeric', hour: '2-digit', minute: '2-digit' })}・${MODE_LABEL[h.mode] || ''}・${fmt(h.sec || 0)}`;
+      const btns = document.createElement('span'); btns.className = 'hist-btns';
+      const mk = (label, fn) => { const b = document.createElement('button'); b.textContent = label; b.onclick = e => { e.stopPropagation(); fn(); }; btns.appendChild(b); };
+      mk('コピー', () => copyText(h.text));
+      mk('削除', () => { history.splice(i, 1); ls.set('history', history); renderHistory(); });
+      head.append(when, btns);
+      const tx = document.createElement('div'); tx.className = 'hist-text'; tx.textContent = h.text;
+      d.append(head, tx);
+      d.onclick = () => d.classList.toggle('open');
+      box.appendChild(d);
+    });
+  }
+
+  async function copyText(t) {
+    try { await navigator.clipboard.writeText(t); toast('コピーしました'); }
+    catch { const o = $('output'); o.value = t; o.select(); document.execCommand('copy'); toast('コピーしました'); }
+  }
+
+  // ---------- recording ----------
+  function pickMime() {
+    const cands = ['audio/mp4', 'audio/webm;codecs=opus', 'audio/webm', 'audio/ogg;codecs=opus'];
+    if (!window.MediaRecorder || !MediaRecorder.isTypeSupported) return '';
+    return cands.find(m => MediaRecorder.isTypeSupported(m)) || '';
+  }
+
+  async function startRec() {
+    showError('');
+    if (!settings.apiKey) { openSettings(); toast('先に API キーを入れてください'); return; }
+    try {
+      stream = await navigator.mediaDevices.getUserMedia({ audio: { echoCancellation: true, noiseSuppression: true, autoGainControl: true } });
+    } catch (e) {
+      showError('マイクを使えませんでした。iPhone の「設定 > Safari > マイク」で許可してください。\n' + (e && e.message || e));
+      return;
+    }
+    const mime = pickMime();
+    recorder = new MediaRecorder(stream, mime ? { mimeType: mime } : undefined);
+    chunks = [];
+    recorder.ondataavailable = e => { if (e.data && e.data.size) chunks.push(e.data); };
+    recorder.onstop = onRecStop;
+    recorder.start(1000);
+    startAt = Date.now();
+    recBtn.textContent = '停止して変換'; recBtn.classList.add('recording');
+    setStatus('録音中…画面を開いたままにしてください');
+    tick = setInterval(() => {
+      const s = (Date.now() - startAt) / 1000;
+      timerEl.textContent = fmt(s);
+      if (s >= MAX_SECONDS) stopRec();
+    }, 250);
+    try { wakeLock = await navigator.wakeLock?.request('screen'); } catch {}
+  }
+
+  function stopRec() {
+    if (recorder && recorder.state !== 'inactive') recorder.stop();
+    clearInterval(tick);
+    stream && stream.getTracks().forEach(t => t.stop());
+    try { wakeLock && wakeLock.release(); } catch {}
+    wakeLock = null;
+    recBtn.classList.remove('recording'); recBtn.textContent = '録音開始';
+  }
+
+  async function onRecStop() {
+    const sec = (Date.now() - startAt) / 1000;
+    const blob = new Blob(chunks, { type: recorder.mimeType || 'audio/mp4' });
+    if (sec < 1 || blob.size < 1000) { setStatus('録音が短すぎました'); return; }
+    await idb.put('last', { blob, sec, at: Date.now() });
+    $('retryBtn').classList.remove('hidden');
+    process(blob, sec);
+  }
+
+  // iOS が裏に回すと録音が止まるので、戻ったときに知らせる
+  document.addEventListener('visibilitychange', () => {
+    if (document.hidden && recorder && recorder.state === 'recording') {
+      stopRec();
+      setTimeout(() => toast('アプリを離れたので録音を止めました'), 300);
+    }
+  });
+
+  // ---------- audio → WAV (16kHz or 8kHz mono) ----------
+  async function toWav(blob) {
+    const Ctx = window.AudioContext || window.webkitAudioContext;
+    const ctx = new Ctx();
+    let buf;
+    try { buf = await ctx.decodeAudioData(await blob.arrayBuffer()); }
+    finally { try { ctx.close(); } catch {} }
+    // 16kHz なら 1分 ≒ 1.9MB。インライン上限に収まらない長さは 8kHz に落とす
+    let rate = 16000;
+    if (buf.duration * rate * 2 * 4 / 3 > INLINE_LIMIT) rate = 8000;
+    if (buf.duration * rate * 2 * 4 / 3 > INLINE_LIMIT) throw new Error('音声が長すぎます（目安15分まで）。分けて送ってください。');
+    const len = Math.ceil(buf.duration * rate);
+    const off = new OfflineAudioContext(1, len, rate);
+    const src = off.createBufferSource(); src.buffer = buf; src.connect(off.destination); src.start();
+    const pcm = (await off.startRendering()).getChannelData(0);
+    const out = new DataView(new ArrayBuffer(44 + pcm.length * 2));
+    const w = (o, s) => { for (let i = 0; i < s.length; i++) out.setUint8(o + i, s.charCodeAt(i)); };
+    w(0, 'RIFF'); out.setUint32(4, 36 + pcm.length * 2, true); w(8, 'WAVE'); w(12, 'fmt ');
+    out.setUint32(16, 16, true); out.setUint16(20, 1, true); out.setUint16(22, 1, true);
+    out.setUint32(24, rate, true); out.setUint32(28, rate * 2, true); out.setUint16(32, 2, true); out.setUint16(34, 16, true);
+    w(36, 'data'); out.setUint32(40, pcm.length * 2, true);
+    for (let i = 0; i < pcm.length; i++) { const s = Math.max(-1, Math.min(1, pcm[i])); out.setInt16(44 + i * 2, s < 0 ? s * 0x8000 : s * 0x7fff, true); }
+    return { blob: new Blob([out], { type: 'audio/wav' }), duration: buf.duration };
+  }
+
+  function blobToBase64(blob) {
+    return new Promise((res, rej) => { const r = new FileReader(); r.onload = () => res(String(r.result).split(',')[1]); r.onerror = () => rej(r.error); r.readAsDataURL(blob); });
+  }
+
+  // ---------- Gemini ----------
+  function buildInstruction() {
+    const today = new Date().toLocaleDateString('ja-JP', { year: 'numeric', month: 'long', day: 'numeric', weekday: 'short' });
+    let s = `あなたは日本語の音声を文字に起こし、読みやすく仕上げる編集者です。今日は${today}です。\n出力は仕上がった本文だけにしてください。前置き・後書き・「以下が〜です」のような説明は書かないこと。\n\n`;
+    s += MODE_PROMPTS[settings.mode];
+    const words = settings.dict.split(/\r?\n/).map(x => x.trim()).filter(Boolean);
+    if (words.length) s += `\n\n次の固有名詞は、音が近ければこの表記を使ってください：\n${words.map(x => '- ' + x).join('\n')}`;
+    if (settings.custom.trim()) s += `\n\n追加の指示：\n${settings.custom.trim()}`;
+    return s;
+  }
+
+  async function callGemini(wavBlob) {
+    const data = await blobToBase64(wavBlob);
+    const res = await fetch(`${API}/models/${encodeURIComponent(settings.model)}:generateContent`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', 'x-goog-api-key': settings.apiKey },
+      body: JSON.stringify({
+        systemInstruction: { parts: [{ text: buildInstruction() }] },
+        contents: [{ role: 'user', parts: [{ inlineData: { mimeType: 'audio/wav', data } }, { text: 'この音声を指示どおりに仕上げてください。' }] }]
+      })
+    });
+    const json = await res.json().catch(() => ({}));
+    if (!res.ok) {
+      const m = json.error && json.error.message || res.statusText;
+      if (res.status === 400 && /API key/i.test(m)) throw new Error('API キーが正しくないようです。設定を確認してください。');
+      if (res.status === 404) throw new Error(`モデル「${settings.model}」が使えません。設定で「使えるモデルを読み込む」を押して選び直してください。`);
+      if (res.status === 429) throw new Error('利用上限に達しました（無料枠の制限の可能性）。少し待つか、有料枠のキーを使ってください。\n' + m);
+      throw new Error(`Gemini エラー (${res.status})：${m}`);
+    }
+    const cand = json.candidates && json.candidates[0];
+    const text = cand && cand.content && (cand.content.parts || []).filter(p => p.text && !p.thought).map(p => p.text).join('').trim();
+    if (!text) throw new Error('結果が空でした' + (cand && cand.finishReason ? `（理由：${cand.finishReason}）` : '') + '。もう一度送信してみてください。');
+    return { text, usage: json.usageMetadata || {} };
+  }
+
+  async function process(blob, sec) {
+    if (busy) return;
+    busy = true; recBtn.disabled = true; showError('');
+    try {
+      setStatus('音声を変換中…');
+      const { blob: wav, duration } = await toWav(blob);
+      sec = sec || duration;
+      setStatus(`Gemini で文字にしています…（${fmt(sec)} 分の音声）`);
+      const t0 = Date.now();
+      const { text, usage } = await callGemini(wav);
+      $('resultCard').classList.remove('hidden');
+      $('output').value = text;
+      $('outputMeta').textContent = `${MODE_LABEL[settings.mode]}・${settings.model}・${((Date.now() - t0) / 1000).toFixed(1)}秒` +
+        (usage.totalTokenCount ? `・${usage.promptTokenCount || 0} → ${usage.candidatesTokenCount || 0} tokens` : '');
+      history.unshift({ at: Date.now(), mode: settings.mode, sec, text });
+      history = history.slice(0, 50);
+      ls.set('history', history); renderHistory();
+      setStatus('できました');
+      $('resultCard').scrollIntoView({ behavior: 'smooth', block: 'start' });
+    } catch (e) {
+      setStatus('失敗しました（録音は保存してあります）');
+      showError((e && e.message) || String(e));
+      $('retryBtn').classList.remove('hidden');
+    } finally {
+      busy = false; recBtn.disabled = false;
+    }
+  }
+
+  // ---------- settings ----------
+  function openSettings() {
+    $('apiKey').value = settings.apiKey; $('dict').value = settings.dict; $('custom').value = settings.custom;
+    renderModelSelect(ls.get('models', null));
+    $('settingsCard').classList.remove('hidden');
+    $('settingsCard').scrollIntoView({ behavior: 'smooth' });
+  }
+  function saveSettings() {
+    settings.apiKey = $('apiKey').value.trim();
+    settings.model = $('model').value;
+    settings.dict = $('dict').value; settings.custom = $('custom').value;
+    ls.set('settings', settings);
+    $('settingsCard').classList.add('hidden');
+    renderSetup(); toast('保存しました');
+    window.scrollTo({ top: 0, behavior: 'smooth' });
+  }
+  async function loadModels() {
+    const key = $('apiKey').value.trim();
+    if (!key) { toast('先に API キーを入れてください'); return; }
+    try {
+      const res = await fetch(`${API}/models?pageSize=200`, { headers: { 'x-goog-api-key': key } });
+      const json = await res.json();
+      if (!res.ok) throw new Error(json.error && json.error.message || res.statusText);
+      const names = (json.models || [])
+        .filter(m => (m.supportedGenerationMethods || []).includes('generateContent'))
+        .map(m => m.name.replace(/^models\//, ''))
+        .filter(n => /^gemini/.test(n) && !/(image|tts|live|embedding|robotics|computer)/.test(n));
+      ls.set('models', names);
+      settings.model = $('model').value;
+      renderModelSelect(names);
+      toast(`${names.length} 個のモデルを読み込みました`);
+    } catch (e) { toast('読み込めませんでした'); showError('モデル一覧の取得に失敗：' + (e.message || e)); }
+  }
+
+  // ---------- wire up ----------
+  recBtn.onclick = () => (recorder && recorder.state === 'recording') ? stopRec() : startRec();
+  document.querySelectorAll('.modes button').forEach(b => b.onclick = () => { settings.mode = b.dataset.mode; ls.set('settings', settings); renderModes(); });
+  $('settingsBtn').onclick = () => $('settingsCard').classList.contains('hidden') ? openSettings() : $('settingsCard').classList.add('hidden');
+  $('saveSettingsBtn').onclick = saveSettings;
+  $('loadModelsBtn').onclick = loadModels;
+  $('copyBtn').onclick = () => copyText($('output').value);
+  $('shareBtn').onclick = async () => {
+    const t = $('output').value;
+    if (navigator.share) { try { await navigator.share({ text: t }); } catch {} } else copyText(t);
+  };
+  $('retryBtn').onclick = async () => {
+    const last = await idb.get('last');
+    if (!last) { toast('保存された録音がありません'); return; }
+    process(last.blob, last.sec);
+  };
+  $('fileInput').onchange = e => {
+    const f = e.target.files && e.target.files[0];
+    if (!f) return;
+    if (!settings.apiKey) { openSettings(); toast('先に API キーを入れてください'); return; }
+    idb.put('last', { blob: f, sec: 0, at: Date.now() });
+    process(f, 0);
+    e.target.value = '';
+  };
+
+  renderModes(); renderSetup(); renderHistory();
+  idb.get('last').then(l => { if (l) $('retryBtn').classList.remove('hidden'); });
+})();
+</script>
+</body>
+</html>
