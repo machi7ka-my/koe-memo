@@ -94,7 +94,7 @@ label.field { display: block; font-size: 14px; font-weight: 600; margin: 14px 0 
     <div class="modes" role="group" aria-label="仕上げ方">
       <button data-mode="clean">整文</button>
       <button data-mode="summary">要約＋本文</button>
-      <button data-mode="memo">箇条書き</button>
+      <button data-mode="nippo">日報用</button>
     </div>
     <div class="rec-wrap">
       <button id="recBtn">録音開始</button>
@@ -133,6 +133,13 @@ label.field { display: block; font-size: 14px; font-weight: 600; margin: 14px 0 
     <select id="model"><option value="gemini-3.8-flash">gemini-3.8-flash</option></select>
     <div class="hint"><button class="icon-btn" id="loadModelsBtn" style="font-size:12px;padding:2px 8px;margin-top:4px">使えるモデルを読み込む</button></div>
 
+    <label class="field" for="think">速さ</label>
+    <select id="think">
+      <option value="fast">速さ優先（考える時間を省く）</option>
+      <option value="normal">ていねい（モデルの標準。遅い）</option>
+    </select>
+    <div class="hint">文字起こしと整文なら「速さ優先」で十分です。結果が雑に感じたら「ていねい」に。</div>
+
     <label class="field" for="dict">固有名詞辞書</label>
     <textarea id="dict" rows="4" placeholder="1行に1語。例：&#10;町中&#10;イシマル&#10;NIコラボ"></textarea>
     <div class="hint">人名・社名・商品名など、正しく表記してほしい言葉。</div>
@@ -170,13 +177,39 @@ label.field { display: block; font-size: 14px; font-weight: 600; margin: 14px 0 
 - フィラー・言い直し・繰り返しは除く。要約・省略はしない
 - 話題が変わるところで段落を分ける
 - 聞き取れない箇所は推測で埋めず［聞き取れず］と書く`,
-    memo: `音声の内容を、話題ごとの見出しと箇条書きで構造化したメモにしてください。
-- 見出しは「## 」で始める
-- 1項目は短く、主語と結論がわかるように
-- やること（ToDo）があれば最後に「## やること」として「- [ ] 」形式でまとめる
-- 話していないことは付け足さない`
+    // 正は Claude のスキル nippo-format（SKILL.md）。スキルの書式を変えたらここも合わせる
+    nippo: `音声は営業の商談メモです。株式会社イシマルの営業日報のフォーマットに変換してください。
+出力は日報本文のみ。コピーしてそのまま提出できる状態にする。冒頭に【ix営業】などのタグは付けない。Markdown の記号（#、**、- 、コードブロック）は使わない。
+
+フォーマット：
+■商材名（具体的な商品名）
+◇目的
+・～～
+
+◇結果
+＜現状＞
+・～～
+　※補足は次行に全角スペースで字下げ
+
+＜要望＞
+・～～
+
+◇次回
+・～～
+
+空行ルール（必須）：◇目的と◇結果の間、＜現状＞と＜要望＞の間、＜要望＞と◇次回の間に、それぞれ空行を1行入れる。＜要望＞が無い場合は＜現状＞と◇次回の間に空行を入れる。
+
+- 1回の訪問で複数商材を扱った場合は、■ブロックを商材ごとに分ける
+- 複数の訪問先の話が混ざっている場合は、訪問先ごとに日報を分け、間に空行を1行入れる
+- 各項目の本文は必ず「・」で始める。意味の区切りで改行し、1行に複数の話題を詰めない
+- ◇結果は＜現状＞（客先の事実・状況）と＜要望＞（客が求めていること）に分ける。要望が読み取れなければ＜現状＞のみ。結果がない活動（アポ取りのみ等）は◇結果ごと省略してよい
+- 音声の誤変換（複合気→複合機、お三つもり→御見積 など）は文脈から直す。固有名詞は明らかな誤りだけ直す
+- 商品名・型番は話に出たものだけを書く。出ていなければ「複合機」のように一般名で書き、推測で型番を足さない
+- ◇目的が話に無ければ文脈から推測して埋める。◇次回が分からなければ「・次回訪問日程は調整中」など、話から言える範囲で書く。捏造しない
+- 推測で補った箇所がある場合のみ、日報本文の後に空行を挟んで「--- 確認: ◯◯は推測です」と1行だけ添える
+- 話の内容から横展開（家具・内装／システム・DX／セキュリティ／iDC／アスクル等）や次の一手がはっきり読み取れる場合のみ、さらに後ろに「💡 ◯◯」と1行だけ添える。こじつけない。無ければ書かない`
   };
-  const MODE_LABEL = { clean: '整文', summary: '要約＋本文', memo: '箇条書き' };
+  const MODE_LABEL = { clean: '整文', summary: '要約＋本文', nippo: '日報用', memo: '箇条書き' };
 
   // ---------- storage helpers (すべて try/catch) ----------
   const ls = {
@@ -200,7 +233,8 @@ label.field { display: block; font-size: 14px; font-weight: 600; margin: 14px 0 
   };
 
   // ---------- state ----------
-  const settings = Object.assign({ apiKey: '', model: 'gemini-3.8-flash', dict: '', custom: '', mode: 'summary' }, ls.get('settings', {}));
+  const settings = Object.assign({ apiKey: '', model: 'gemini-3.8-flash', dict: '', custom: '', mode: 'summary', think: 'fast' }, ls.get('settings', {}));
+  if (!MODE_PROMPTS[settings.mode]) settings.mode = 'summary'; // 廃止した「箇条書き」を選んでいた端末向け
   let history = ls.get('history', []);
   let recorder = null, chunks = [], stream = null, startAt = 0, tick = null, wakeLock = null, busy = false;
 
@@ -361,11 +395,11 @@ label.field { display: block; font-size: 14px; font-weight: 600; margin: 14px 0 
   }
 
   // 同じモデルで2回まで待って再送 → だめなら次のモデルへ
-  async function callWithRetry(data) {
+  async function callWithRetry(data, onText) {
     let lastErr;
     for (const model of modelChain()) {
       for (let attempt = 0; attempt < 3; attempt++) {
-        try { return Object.assign(await callGemini(data, model), { model }); }
+        try { return Object.assign(await callGemini(data, model, onText), { model }); }
         catch (e) {
           lastErr = e;
           if (!e.transient) throw e;
@@ -381,19 +415,47 @@ label.field { display: block; font-size: 14px; font-weight: 600; margin: 14px 0 
     throw lastErr;
   }
 
-  async function callGemini(data, model) {
-    const res = await fetch(`${API}/models/${encodeURIComponent(model)}:generateContent`, {
+  // 速さ優先のときに試す「考える量」の指定。モデルが受け付けなければ次へ（null は指定なし）
+  function thinkingVariants(model) {
+    if (settings.think !== 'fast') return [null];
+    if (/gemini-2\.5-pro/.test(model)) return [{ thinkingBudget: 128 }, null];
+    if (/gemini-2\.5/.test(model)) return [{ thinkingBudget: 0 }, null];
+    return [{ thinkingLevel: 'minimal' }, { thinkingLevel: 'low' }, { thinkingBudget: 0 }, null];
+  }
+
+  // 受け付けられた指定をモデルごとに覚えておき、次回から最初に使う
+  async function callGemini(data, model, onText) {
+    const okMap = ls.get('thinkOk', {});
+    const variants = thinkingVariants(model);
+    let i = Math.min(okMap[model] ?? 0, variants.length - 1);
+    for (; i < variants.length; i++) {
+      try {
+        const r = await callGeminiOnce(data, model, variants[i], onText);
+        if (okMap[model] !== i) { okMap[model] = i; ls.set('thinkOk', okMap); }
+        return r;
+      } catch (e) {
+        if (!(e.status === 400 && variants[i] && i < variants.length - 1)) throw e;
+      }
+    }
+  }
+
+  async function callGeminiOnce(data, model, thinking, onText) {
+    const body = {
+      systemInstruction: { parts: [{ text: buildInstruction() }] },
+      contents: [{ role: 'user', parts: [{ inlineData: { mimeType: 'audio/wav', data } }, { text: 'この音声を指示どおりに仕上げてください。' }] }]
+    };
+    if (thinking) body.generationConfig = { thinkingConfig: thinking };
+    // 書けたところから順に受け取る（streamGenerateContent + SSE）
+    const res = await fetch(`${API}/models/${encodeURIComponent(model)}:streamGenerateContent?alt=sse`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json', 'x-goog-api-key': settings.apiKey },
-      body: JSON.stringify({
-        systemInstruction: { parts: [{ text: buildInstruction() }] },
-        contents: [{ role: 'user', parts: [{ inlineData: { mimeType: 'audio/wav', data } }, { text: 'この音声を指示どおりに仕上げてください。' }] }]
-      })
+      body: JSON.stringify(body)
     });
-    const json = await res.json().catch(() => ({}));
     if (!res.ok) {
+      const json = await res.json().catch(() => ({}));
       const m = json.error && json.error.message || res.statusText;
       if (res.status === 400 && /API key/i.test(m)) throw new Error('API キーが正しくないようです。設定を確認してください。');
+      if (res.status === 400) throw Object.assign(new Error(`Gemini エラー (400)：${m}`), { status: 400 });
       if (res.status === 404) throw Object.assign(new Error(`モデル「${model}」が使えません。設定で「使えるモデルを読み込む」を押して選び直してください。`), { transient: model !== settings.model });
       if (res.status === 429) throw new Error('利用上限に達しました（無料枠の制限の可能性）。少し待つか、有料枠のキーを使ってください。\n' + m);
       const err = new Error(res.status === 503
@@ -402,10 +464,31 @@ label.field { display: block; font-size: 14px; font-weight: 600; margin: 14px 0 
       err.transient = res.status >= 500;
       throw err;
     }
-    const cand = json.candidates && json.candidates[0];
-    const text = cand && cand.content && (cand.content.parts || []).filter(p => p.text && !p.thought).map(p => p.text).join('').trim();
-    if (!text) throw new Error('結果が空でした' + (cand && cand.finishReason ? `（理由：${cand.finishReason}）` : '') + '。もう一度送信してみてください。');
-    return { text, usage: json.usageMetadata || {} };
+    const reader = res.body.getReader();
+    const dec = new TextDecoder();
+    let buf = '', text = '', usage = {}, finish = '';
+    const handle = line => {
+      line = line.trim();
+      if (!line.startsWith('data:')) return;
+      let j; try { j = JSON.parse(line.slice(5)); } catch { return; }
+      if (j.error) throw Object.assign(new Error(`Gemini エラー：${j.error.message || ''}`), { transient: true });
+      const c = j.candidates && j.candidates[0];
+      const add = c && c.content ? (c.content.parts || []).filter(p => p.text && !p.thought).map(p => p.text).join('') : '';
+      if (add) { text += add; onText && onText(text); }
+      if (c && c.finishReason) finish = c.finishReason;
+      if (j.usageMetadata) usage = j.usageMetadata;
+    };
+    for (;;) {
+      const { value, done } = await reader.read();
+      if (done) break;
+      buf += dec.decode(value, { stream: true });
+      let k;
+      while ((k = buf.indexOf('\n')) >= 0) { handle(buf.slice(0, k)); buf = buf.slice(k + 1); }
+    }
+    handle(buf + dec.decode());
+    text = text.trim();
+    if (!text) throw new Error('結果が空でした' + (finish ? `（理由：${finish}）` : '') + '。もう一度送信してみてください。');
+    return { text, usage };
   }
 
   async function process(blob, sec) {
@@ -413,15 +496,29 @@ label.field { display: block; font-size: 14px; font-weight: 600; margin: 14px 0 
     busy = true; recBtn.disabled = true; showError('');
     try {
       setStatus('音声を変換中…');
+      const tc = Date.now();
       const { blob: wav, duration } = await toWav(blob);
+      const data = await blobToBase64(wav);
+      const convSec = (Date.now() - tc) / 1000;
       sec = sec || duration;
-      setStatus(`Gemini で文字にしています…（${fmt(sec)} の音声）`);
+      setStatus(`送信して文字にしています…（${fmt(sec)} の音声・${(wav.size / 1048576).toFixed(1)}MB）`);
       const t0 = Date.now();
-      const { text, usage, model } = await callWithRetry(await blobToBase64(wav));
+      let firstAt = 0;
+      const onText = t => {
+        if (!firstAt) {
+          firstAt = Date.now();
+          $('resultCard').classList.remove('hidden');
+          $('outputMeta').textContent = '';
+          setStatus('書き出し中…');
+        }
+        $('output').value = t;
+      };
+      const { text, usage, model } = await callWithRetry(data, t => { onText(t); });
+      const s = ms => (ms / 1000).toFixed(1);
       $('resultCard').classList.remove('hidden');
       $('output').value = text;
-      $('outputMeta').textContent = `${MODE_LABEL[settings.mode]}・${model}・${((Date.now() - t0) / 1000).toFixed(1)}秒` +
-        (usage.totalTokenCount ? `・${usage.promptTokenCount || 0} → ${usage.candidatesTokenCount || 0} tokens` : '');
+      $('outputMeta').textContent = `${MODE_LABEL[settings.mode]}・${model}・変換${convSec.toFixed(1)}秒＋送信〜書き始め${s((firstAt || Date.now()) - t0)}秒＋書き出し${s(Date.now() - (firstAt || Date.now()))}秒` +
+        (usage.totalTokenCount ? `・${usage.promptTokenCount || 0} → ${usage.candidatesTokenCount || 0} tokens` + (usage.thoughtsTokenCount ? `（考える ${usage.thoughtsTokenCount}）` : '') : '');
       history.unshift({ at: Date.now(), mode: settings.mode, sec, text });
       history = history.slice(0, 50);
       ls.set('history', history); renderHistory();
@@ -439,6 +536,7 @@ label.field { display: block; font-size: 14px; font-weight: 600; margin: 14px 0 
   // ---------- settings ----------
   function openSettings() {
     $('apiKey').value = settings.apiKey; $('dict').value = settings.dict; $('custom').value = settings.custom;
+    $('think').value = settings.think;
     renderModelSelect(ls.get('models', null));
     $('settingsCard').classList.remove('hidden');
     $('settingsCard').scrollIntoView({ behavior: 'smooth' });
@@ -447,6 +545,7 @@ label.field { display: block; font-size: 14px; font-weight: 600; margin: 14px 0 
     settings.apiKey = $('apiKey').value.trim();
     settings.model = $('model').value;
     settings.dict = $('dict').value; settings.custom = $('custom').value;
+    settings.think = $('think').value;
     ls.set('settings', settings);
     $('settingsCard').classList.add('hidden');
     renderSetup(); toast('保存しました');
